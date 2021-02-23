@@ -2,19 +2,19 @@ package gin_api_restriction
 
 import (
 	"bytes"
+	"context"
 	"encoding/gob"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 )
 
-type RestrictionMiddleware interface {
+type RestrictionClient interface {
 	// returns whether the key is restricted, times remain, and error if there is any
-	Validate(c *gin.Context, key string) (bool, *RestrictionEntity, error)
+	Validate(c context.Context, key string) (bool, *RestrictionEntity, error)
 }
 
-type RestrictionMiddlewareImpl struct {
+type RestrictionClientImpl struct {
 	conf   *RestrictionConfig
 	client *redis.Client
 }
@@ -25,7 +25,7 @@ type RestrictionEntity struct {
 	ResetTimeStamp int64
 }
 
-func (r *RestrictionMiddlewareImpl) Validate(c *gin.Context, key string) (bool, *RestrictionEntity, error) {
+func (r *RestrictionClientImpl) Validate(c context.Context, key string) (bool, *RestrictionEntity, error) {
 	res, err := r.client.Get(c, key).Result()
 	switch {
 	case err == redis.Nil:
@@ -40,7 +40,7 @@ func (r *RestrictionMiddlewareImpl) Validate(c *gin.Context, key string) (bool, 
 	}
 }
 
-func (r *RestrictionMiddlewareImpl) createNewRecord(c *gin.Context, key string) *RestrictionEntity {
+func (r *RestrictionClientImpl) createNewRecord(c context.Context, key string) *RestrictionEntity {
 	record := &RestrictionEntity{
 		TotalLimit:     r.conf.RestrictionCount,
 		TimesRemain:    r.conf.RestrictionCount,
@@ -59,7 +59,7 @@ func (r *RestrictionMiddlewareImpl) createNewRecord(c *gin.Context, key string) 
 	return record
 }
 
-func (r *RestrictionMiddlewareImpl) checkAndUpdateNewRecord(c *gin.Context, key string, recordBuf string) (bool, *RestrictionEntity) {
+func (r *RestrictionClientImpl) checkAndUpdateNewRecord(c context.Context, key string, recordBuf string) (bool, *RestrictionEntity) {
 	record := &RestrictionEntity{}
 	var buf bytes.Buffer
 	decoder := gob.NewDecoder(&buf)
@@ -89,8 +89,8 @@ type RestrictionConfig struct {
 	RestrictionTime  time.Duration
 }
 
-func NewRestrictionClient(conf *RestrictionConfig, rdbClient *redis.Client) RestrictionMiddleware {
-	return &RestrictionMiddlewareImpl{
+func NewRestrictionClient(conf *RestrictionConfig, rdbClient *redis.Client) RestrictionClient {
+	return &RestrictionClientImpl{
 		client: rdbClient,
 		conf:   conf,
 	}
