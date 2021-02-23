@@ -1,4 +1,4 @@
-module gin-api-restriction
+module github.com/young-zy/gin-api-restriction
 
 go 1.16
 
