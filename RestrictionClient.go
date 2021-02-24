@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"errors"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -30,55 +31,69 @@ func (r *RestrictionClientImpl) Validate(c context.Context, key string) (bool, *
 	switch {
 	case err == redis.Nil:
 		// create new k-v
-		return true, r.createNewRecord(c, key), nil
+		record, err := r.createNewRecord(c, key)
+		if err != nil {
+			return false, nil, err
+		}
+		return true, record, nil
 	case err != nil:
 		return false, nil, err
 	default:
-		// check timestamp
-		success, entity := r.checkAndUpdateNewRecord(c, key, res)
-		return success, entity, nil
+		return r.checkAndUpdateNewRecord(c, key, res)
 	}
 }
 
-func (r *RestrictionClientImpl) createNewRecord(c context.Context, key string) *RestrictionEntity {
+func (r *RestrictionClientImpl) setRecord(c context.Context, key string, record *RestrictionEntity) error {
+	var buf bytes.Buffer
+	encoder := gob.NewEncoder(&buf)
+	err := encoder.Encode(record)
+	if err != nil {
+		return err
+	}
+	err = r.client.Set(c, key, buf.String(), r.conf.RestrictionTime).Err()
+	return err
+}
+
+func (r *RestrictionClientImpl) createNewRecord(c context.Context, key string) (*RestrictionEntity, error) {
 	record := &RestrictionEntity{
 		TotalLimit:     r.conf.RestrictionCount,
 		TimesRemain:    r.conf.RestrictionCount,
 		ResetTimeStamp: time.Now().Unix() + int64(r.conf.RestrictionTime.Seconds()),
 	}
-	var buf bytes.Buffer
-	encoder := gob.NewEncoder(&buf)
-	err := encoder.Encode(record)
+	err := r.setRecord(c, key, record)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	err = r.client.Set(c, key, buf.String(), r.conf.RestrictionTime).Err()
-	if err != nil {
-		panic(err)
-	}
-	return record
+	return record, nil
 }
 
-func (r *RestrictionClientImpl) checkAndUpdateNewRecord(c context.Context, key string, recordBuf string) (bool, *RestrictionEntity) {
+func (r *RestrictionClientImpl) checkAndUpdateNewRecord(c context.Context, key string, recordBuf string) (bool, *RestrictionEntity, error) {
 	record := &RestrictionEntity{}
 	var buf bytes.Buffer
 	decoder := gob.NewDecoder(&buf)
 	buf.WriteString(recordBuf)
 	err := decoder.Decode(record)
 	if err != nil {
-		panic(err)
+		return false, nil, errors.New("failed to decode the record")
 	}
 	if record.ResetTimeStamp <= time.Now().Unix() {
 		// delete key and create new if already expired
 		r.client.Del(c, key)
-		record = r.createNewRecord(c, key)
-		return true, record
+		record, err = r.createNewRecord(c, key)
+		if err != nil {
+			return false, nil, err
+		}
+		return true, record, nil
 	} else {
 		if record.TimesRemain == 0 {
-			return false, record
+			return false, record, nil
 		} else {
 			record.TimesRemain--
-			return true, record
+			err := r.setRecord(c, key, record)
+			if err != nil {
+				return false, nil, err
+			}
+			return true, record, nil
 		}
 	}
 }
